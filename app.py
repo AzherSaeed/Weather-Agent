@@ -1,29 +1,22 @@
 import sys
 import json
 import logging
+
 from rich.console import Console
 from rich.logging import RichHandler
 
-
 from llmClient import llm
-from tools import tools
-from weather import get_weather
+from TOOLS import OPENAI_TOOLS, TOOL_REGISTRY
 from config import configure_logging
 from prompts import promptsManager
-
-
-
 
 console = Console()
 
 
 def configure_rich_logging():
     configure_logging()
-    
 
     root_logger = logging.getLogger()
-
-    # Replace default handlers with RichHandler
     root_logger.handlers.clear()
 
     handler = RichHandler(
@@ -32,90 +25,105 @@ def configure_rich_logging():
         show_path=False,
     )
 
-
     formatter = logging.Formatter("%(message)s")
     handler.setFormatter(formatter)
 
     root_logger.addHandler(handler)
 
 
-
-messages = [
-    {
-        "role": "system",
-        "content": promptsManager.system_prompt_for_weather(),
-    }
-]
-
-question = input("Type Question: ")
-
-messages.append(
-    {
-        "role": "user",
-        "content": question,
-    }
-)
-
-    
 def main():
+
     configure_rich_logging()
+
     logger = logging.getLogger(__name__)
-    
-    try:
 
-        logger.info("Sending request to OpenAI")
-        response_message  = llm.generate(
-            messages=messages,
-            temperature=1,
-            tools=tools
-        )
+    messages = [
+        {
+            "role": "system",
+            "content": promptsManager.system_prompt_for_weather(),
+        }
+    ]
 
-        # if response_message.tool_calls:
-        if not isinstance(response_message, str) and response_message.tool_calls:
-            tool_call = response_message.tool_calls[0]
-            arguments = json.loads(
-                tool_call.function.arguments
-            )
-            city_name = arguments["city"]
-            weather_response = get_weather(city_name)
-            messages.append(response_message)
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": json.dumps(weather_response)
-                }
-            )
-            
-            print(weather_response , "weather_responseweather_responseweather_response")
+    while True:
 
-        logger.info("Sending tool result back to OpenAI")
-        assistant_message  = llm.generate(
-            messages=messages,
-            temperature=1,
-            tools=None
-        )
-        logger.info("Assistant respose added in messages")
+        question = input("\nYou: ")
+
+        if question.lower() in ["exit", "quit"]:
+            break
+
         messages.append(
             {
-                "role": "assistant",
-                "content": assistant_message
+                "role": "user",
+                "content": question,
             }
         )
 
+        logger.info("Sending request to OpenAI")
+
+        response_message = llm.generate(
+            messages=messages,
+            temperature=1,
+            tools=OPENAI_TOOLS,
+        )
+
+        if response_message.tool_calls:
+
+            messages.append(response_message)
+
+            for tool_call in response_message.tool_calls:
+
+                tool_name = tool_call.function.name
+
+                arguments = json.loads(
+                    tool_call.function.arguments
+                )
+
+                logger.info(f"Executing tool: {tool_name}")
+
+                tool_function = TOOL_REGISTRY.get(tool_name)
+
+                if tool_function is None:
+                    raise ValueError(
+                        f"Unknown tool: {tool_name}"
+                    )
+
+                result = tool_function(**arguments)
+
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": json.dumps(result),
+                    }
+                )
+
+            logger.info("Sending tool result back to OpenAI")
+
+            final_message = llm.generate(
+                messages=messages,
+                temperature=1,
+                tools=None,
+            )
+
+            assistant_message = final_message.content
+
+        else:
+
+            assistant_message = response_message.content
+
+        messages.append(
+            {
+                "role": "assistant",
+                "content": assistant_message,
+            }
+        )
 
         console.print(
-            f"[cyan]Open AI Response:[/cyan] {assistant_message}"
+            f"\n[cyan]Assistant:[/cyan] {assistant_message}"
         )
-        return 0
 
-    except KeyboardInterrupt:
-        logger.warning("Interrupted by user.")
-        return 1
+    return 0
 
-    except Exception:
-        logger.exception("Unexpected Application Error")
-        return 1
 
 if __name__ == "__main__":
     sys.exit(main())
