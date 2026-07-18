@@ -9,7 +9,7 @@ from config import (
 
 
 def get_weather(city: str):
-
+    logger.info("Weather forcast helper calling...")
     try:
         url = (
             f"http://api.weatherapi.com/v1/current.json"
